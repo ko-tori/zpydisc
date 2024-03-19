@@ -1,0 +1,8 @@
+.game__container {
+    position: absolute;
+    border: 1px solid black;
+}
+
+span {
+    margin-right: 8px;
+}
