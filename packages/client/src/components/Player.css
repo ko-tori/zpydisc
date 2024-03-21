@@ -2,6 +2,6 @@
   border-radius: 50%;
   position: absolute;
   user-select: none;
-  -webkit-user-drag: none;
+  pointer-events: none;
   transform: translate(-50%, -50%);
 }

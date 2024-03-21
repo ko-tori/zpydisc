@@ -16,6 +16,14 @@ export class StateHandlerRoom extends Room<State> {
       this.state.handleKeyUp(client.sessionId, _data);
     });
 
+    this.onMessage('newDest', (client, _data) => {
+      this.state.handlePointerDown(client.sessionId, _data);
+    });
+
+    this.onMessage('clearDest', (client, _data) => {
+      this.state.handlePointerUp(client.sessionId);
+    });
+
     this.setSimulationInterval((deltaTime) => this.update(deltaTime));
   }
 

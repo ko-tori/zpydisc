@@ -54,4 +54,17 @@ export class State extends Schema {
     if (!player) return;
     handleKeyUp(player, code);
   }
+
+  handlePointerDown(sessionId: string, dest: [number, number]) {
+    const player = this._getPlayer(sessionId);
+    if (!player) return;
+    [player.destX, player.destY] = dest;
+    player.dest = true;
+  }
+
+  handlePointerUp(sessionId: string) {
+    const player = this._getPlayer(sessionId);
+    if (!player) return;
+    player.dest = false;
+  }
 }

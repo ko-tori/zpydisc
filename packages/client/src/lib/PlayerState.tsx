@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { MAX_X, MAX_Y, MIN_X, MIN_Y, FRAME_TIME, MAX_SPEED, KEYS_TO_RECORD, WALL_ELASTICITY, ACCELERATION } from '../../../server/src/shared/Constants';
+import { WIDTH, HEIGHT, FRAME_TIME, MAX_SPEED, WALL_ELASTICITY, ACCELERATION, MAX_ACCELERATION } from '../../../server/src/shared/Constants';
 
 const lerp = (x: number, y: number, a: number) => x * (1 - a) + y * a;
 
@@ -34,16 +34,15 @@ export class PlayerState {
     }
 }
 
-function normalizeVelocity(player: PlayerState) {
-    const m = Math.sqrt(player.vx ** 2 + player.vy ** 2);
-    if (m > MAX_SPEED) {
-        return [player.vx * MAX_SPEED / m, player.vy * MAX_SPEED / m];
-    } else {
-        return [player.vx, player.vy];
+function cap(x: number, y: number, m: number) {
+    const m2 = Math.sqrt(x ** 2 + y ** 2);
+    if (m2 > m) {
+        return [x * m / m2, y * m / m2];
     }
+    return [x, y];
 }
 
-export function nextState(player: PlayerState, deltaTime: number, keys: Map<string, boolean>) {
+export function nextState(player: PlayerState, deltaTime: number, keys: Map<string, boolean>, dest: [number, number] | null) {
     const newPlayer = { ...player };
     if (!newPlayer.local) {
         newPlayer.localX = lerp(newPlayer.localX, newPlayer.x, 0.2);
@@ -53,38 +52,53 @@ export function nextState(player: PlayerState, deltaTime: number, keys: Map<stri
     const frameCt = deltaTime / FRAME_TIME;
     newPlayer.x += newPlayer.vx * frameCt;
     newPlayer.y += newPlayer.vy * frameCt;
-    if (newPlayer.x > MAX_X - player.r) {
-        newPlayer.x = MAX_X - player.r;
+    if (newPlayer.x > WIDTH - player.r) {
+        newPlayer.x = WIDTH - player.r;
         newPlayer.vx *= -WALL_ELASTICITY;
     }
-    if (newPlayer.x < MIN_X + player.r) {
-        newPlayer.x = MIN_X + player.r;
+    if (newPlayer.x < player.r) {
+        newPlayer.x = player.r;
         newPlayer.vx *= -WALL_ELASTICITY;
     }
-    if (newPlayer.y > MAX_Y - player.r) {
-        newPlayer.y = MAX_Y - player.r;
+    if (newPlayer.y > HEIGHT - player.r) {
+        newPlayer.y = HEIGHT - player.r;
         newPlayer.vy *= -WALL_ELASTICITY;
     }
-    if (newPlayer.y < MIN_Y + player.r) {
-        newPlayer.y = MIN_Y + player.r;
+    if (newPlayer.y < player.r) {
+        newPlayer.y = player.r;
         newPlayer.vy *= -WALL_ELASTICITY;
+    }
+
+    let ax = 0;
+    let ay = 0;
+
+    if (dest) {
+        ax += (dest[0] - player.x) / 1000;
+        ay += (dest[1] - player.y) / 1000;
     }
 
     if (keys.get('KeyW')) {
-        newPlayer.vy += ACCELERATION * frameCt;
+        ay += ACCELERATION * frameCt;
     }
     if (keys.get('KeyA')) {
-        newPlayer.vx -= ACCELERATION * frameCt;
+        ax -= ACCELERATION * frameCt;
     }
     if (keys.get('KeyS')) {
-        newPlayer.vy -= ACCELERATION * frameCt;
+        ay -= ACCELERATION * frameCt;
     }
     if (keys.get('KeyD')) {
-        newPlayer.vx += ACCELERATION * frameCt;
+        ax += ACCELERATION * frameCt;
     }
 
-    normalizeVelocity(newPlayer);
+    [ax, ay] = cap(ax, ay, MAX_ACCELERATION);
 
+    newPlayer.vx += ax;
+    newPlayer.vy += ay;
+
+    [newPlayer.vx, newPlayer.vy] = cap(newPlayer.vx, newPlayer.vy, MAX_SPEED);
+
+    //newPlayer.localX = lerp(newPlayer.localX, newPlayer.x, 0.2);
+    //newPlayer.localY = lerp(newPlayer.localY, newPlayer.y, 0.2);
     newPlayer.localX = newPlayer.x;
     newPlayer.localY = newPlayer.y;
 

@@ -1,5 +1,5 @@
 import { Schema, MapSchema, type } from '@colyseus/schema';
-import { MAX_X, MAX_Y, MIN_X, MIN_Y, FRAME_TIME, MAX_SPEED, KEYS_TO_RECORD, WALL_ELASTICITY, ACCELERATION } from '../shared/Constants';
+import { WIDTH, HEIGHT, FRAME_TIME, MAX_SPEED, KEYS_TO_RECORD, WALL_ELASTICITY, ACCELERATION, MAX_ACCELERATION } from '../shared/Constants';
 
 export type TPlayerOptions = Pick<Player, 'sessionId' | 'userId' | 'name' | 'avatarUri' | 'x' | 'y'>;
 
@@ -31,6 +31,15 @@ export class Player extends Schema {
   @type('number')
   public r: number;
 
+  @type('number')
+  public destX: number;
+
+  @type('number')
+  public destY: number;
+
+  @type('boolean')
+  public dest: boolean;
+
   @type({ map: "boolean" })
   public keys = new MapSchema<boolean>();
 
@@ -42,19 +51,22 @@ export class Player extends Schema {
     this.name = name;
     this.sessionId = sessionId;
     this.r = Math.random() * 100 + 50;
-    this.x = Math.random() * (MAX_X - 2 * this.r) + this.r;
-    this.y = Math.random() * (MAX_Y - 2 * this.r) + this.r;
+    this.x = Math.random() * (WIDTH - 2 * this.r) + this.r;
+    this.y = Math.random() * (HEIGHT - 2 * this.r) + this.r;
     this.vx = 0;
     this.vy = 0;
+    this.destX = 0;
+    this.destY = 0;
+    this.dest = false;
   }
 }
 
-function normalizeVelocity(player: Player) {
-  const m = Math.sqrt(player.vx ** 2 + player.vy ** 2);
-  if (m > MAX_SPEED) {
-    player.vx *= MAX_SPEED / m;
-    player.vy *= MAX_SPEED / m;
+function cap(x: number, y: number, m: number) {
+  const m2 = Math.sqrt(x ** 2 + y ** 2);
+  if (m2 > m) {
+    return [x * m / m2, y * m / m2];
   }
+  return [x, y];
 }
 
 export function handleKeyDown(player: Player, code: string) {
@@ -71,35 +83,48 @@ export function updatePlayer(player: Player, deltaTime: number) {
   const frameCt = deltaTime / FRAME_TIME;
   player.x += player.vx * frameCt;
   player.y += player.vy * frameCt;
-  if (player.x > MAX_X - player.r) {
-    player.x = MAX_X - player.r;
+  if (player.x > WIDTH - player.r) {
+    player.x = WIDTH - player.r;
     player.vx *= -WALL_ELASTICITY;
   }
-  if (player.x < MIN_X + player.r) {
-    player.x = MIN_X + player.r;
+  if (player.x < player.r) {
+    player.x = player.r;
     player.vx *= -WALL_ELASTICITY;
   }
-  if (player.y > MAX_Y - player.r) {
-    player.y = MAX_Y - player.r;
+  if (player.y > HEIGHT - player.r) {
+    player.y = HEIGHT - player.r;
     player.vy *= -WALL_ELASTICITY;
   }
-  if (player.y < MIN_Y + player.r) {
-    player.y = MIN_Y + player.r;
+  if (player.y < player.r) {
+    player.y = player.r;
     player.vy *= -WALL_ELASTICITY;
+  }
+
+  let ax = 0;
+  let ay = 0;
+
+  if (player.dest) {
+    ax += (player.destX - player.x) / 1000;
+    ay += (player.destY - player.y) / 1000;
   }
 
   if (player.keys.get('KeyW')) {
-    player.vy += ACCELERATION * frameCt;
+    ay += ACCELERATION * frameCt;
   }
   if (player.keys.get('KeyA')) {
-    player.vx -= ACCELERATION * frameCt;
+    ax -= ACCELERATION * frameCt;
   }
   if (player.keys.get('KeyS')) {
-    player.vy -= ACCELERATION * frameCt;
+    ay -= ACCELERATION * frameCt;
   }
   if (player.keys.get('KeyD')) {
-    player.vx += ACCELERATION * frameCt;
+    ax += ACCELERATION * frameCt;
   }
 
-  normalizeVelocity(player);
+  [ax, ay] = cap(ax, ay, MAX_ACCELERATION);
+
+  player.vx += ax;
+  player.vy += ay;
+
+  [player.vx, player.vy] = cap(player.vx, player.vy, MAX_SPEED);
 }
