@@ -8,5 +8,14 @@
     "tunnel": "cloudflared tunnel --url http://localhost:3000"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "colyseus": "^0.15.17",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zpy": "github:ko-tori/zpy"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.11"
+  }
 }

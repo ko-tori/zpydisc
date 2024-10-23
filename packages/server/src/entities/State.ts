@@ -1,9 +1,14 @@
-import { Schema, MapSchema, type } from '@colyseus/schema';
-import { TPlayerOptions, Player, handleKeyDown, handleKeyUp } from './Player';
+import { Client } from 'colyseus';
+import { Schema, MapSchema, type, filter } from '@colyseus/schema';
+import { TPlayerOptions, Player } from './Player';
+import { FriendCall, GameState } from './GameState';
+import { Card } from "zpy/src/Card";
+import { Play } from 'zpy/src/Play';
 
 export interface IState {
   roomName: string;
   channelId: string;
+  inLobby: boolean;
 }
 
 export class State extends Schema {
@@ -16,13 +21,17 @@ export class State extends Schema {
   @type('string')
   public channelId: string;
 
-  serverAttribute = 'this attribute wont be sent to the client-side';
+  @type('boolean')
+  public inLobby: boolean;
 
-  // Init
+  @filter(function (this: State, client: Client, value: GameState, root: Schema) { return !this.inLobby; })
+  @type(GameState) gameState?: GameState;
+
   constructor(attributes: IState) {
     super();
     this.roomName = attributes.roomName;
     this.channelId = attributes.channelId;
+    this.inLobby = attributes.inLobby;
   }
 
   private _getPlayer(sessionId: string): Player | undefined {
@@ -43,28 +52,20 @@ export class State extends Schema {
     }
   }
 
-  handleKeyDown(sessionId: string, code: string) {
-    const player = this._getPlayer(sessionId);
-    if (!player) return;
-    handleKeyDown(player, code);
+  startRound(playerId: string) {
+
   }
 
-  handleKeyUp(sessionId: string, code: string) {
-    const player = this._getPlayer(sessionId);
-    if (!player) return;
-    handleKeyUp(player, code);
-  }
+  declare(playerId: string, card: Card, amount?: number) {
 
-  handlePointerDown(sessionId: string, dest: [number, number]) {
-    const player = this._getPlayer(sessionId);
-    if (!player) return;
-    [player.destX, player.destY] = dest;
-    player.dest = true;
   }
+  endDealPhase(playerId: string) {
 
-  handlePointerUp(sessionId: string) {
-    const player = this._getPlayer(sessionId);
-    if (!player) return;
-    player.dest = false;
+  }
+  endBottomPhase(playerId: string, card: Card, friendCalls: FriendCall[]) {
+
+  }
+  makePlay(playerId: string, play: Play[]) {
+
   }
 }
