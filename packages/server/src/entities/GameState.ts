@@ -1,6 +1,6 @@
-import { Schema, SetSchema, type, filter, ArraySchema, MapSchema } from '@colyseus/schema';
+import { Schema, SetSchema, type, filter, ArraySchema } from '@colyseus/schema';
 import { Client } from '@colyseus/core';
-import { Card, createDeck, parseCard, getPointValue, getSuit, compareCards } from "zpy/src/Card";
+import { Card, createDeck, parseCard, getPointValue, getSuit, compareCards, randomSuit } from "zpy/src/Card";
 import { Settings } from "./Settings";
 import { Play } from 'zpy/src/Play';
 import { Player, TPlayerOptions } from './Player';
@@ -13,7 +13,7 @@ export class Declaration extends Schema {
     @type('string') card: Card;
     @type('number') amount: number;
     @type('string') playerId: string;
-    @filter(function (this: Declaration, client: Client, value: number, root: Schema) {
+    @filter(function (this: Declaration, client: Client) {
         return this.prevPlayer === client.sessionId;
     })
     @type('boolean') canPrevPlayerReinforce: boolean;
@@ -84,9 +84,15 @@ export class GameState extends Schema {
     /** The phase of the game. Starts with score and waits for `startRound` to change to `'deal'`. */
     @type(Settings) settings: Settings;
     @type('string') phase: GamePhase = 'score';
-    @type(['string']) deck: Card[] = [];
+    @filter(function () {
+        return false;
+    })
+    @type(['string']) deck = new ArraySchema<Card>();
     @type([Player]) players;
-    @type(['string']) bottom: Card[] = [];
+    @filter(function (this: GameState, client: Client) {
+        return client.sessionId === this.declaration.playerId;
+    })
+    @type(['string']) bottom = new ArraySchema<Card>();
     @type('number') bottomSize: number;
     @type('string') declared?: Card;
     @type([Declaration]) declarations = new ArraySchema<Declaration>();
@@ -125,9 +131,9 @@ export class GameState extends Schema {
     startRound() {
         if (this.phase !== 'score') throw new Error('Game can only be started in score phase.');
         this.phase = 'deal';
-        this.bottom = [];
+        this.bottom = new ArraySchema();
         this.friends = new SetSchema();
-        this.deck = createDeck(this.settings.numDecks);
+        this.deck = new ArraySchema(...createDeck(this.settings.numDecks));
         this.declarations = new ArraySchema();
         this.players.forEach(p => p.newRound());
     }
@@ -148,7 +154,7 @@ export class GameState extends Schema {
         if (parseCard(card)[0] !== player.rank) throw new Error('Player trying to declare out of rank.');
         if (this.settings.winnersDeclare && !this.winners.has(player.sessionId)) throw new Error('Only winners may declare.');
         if (player.hand.filter(c => c === card).length < amount) throw new Error('Player trying to declare with cards they don\'t have.');
-        const prevDeclaration = this.declarations[this.declarations.length - 1];
+        const prevDeclaration = this.declaration;
         if (prevDeclaration) {
             if (amount === prevDeclaration.amount && prevDeclaration.canPrevPlayerReinforce) { // Someone trying to reinforce.
                 const origDeclaration = this.declarations[this.declarations.length - 2];
@@ -163,17 +169,19 @@ export class GameState extends Schema {
 
     endDealPhase(): DealPhaseResult {
         if (this.phase !== 'deal') throw new Error('Not in deal phase.');
-        this.declared = this.declarations[this.declarations.length - 1].card;
+        this.declared = this.declaration.card;
         this.phase = 'bottom';
         this.incrementTurn();
-        const declaration = this.declarations[this.declarations.length - 1];
-        const nextPlayerId = declaration ? declaration.playerId : this.currentTurn; // If no one declares, force first player to be dealer.
+        if (this.declarations.length === 0) {
+            this.declarations.push(new Declaration(`${this.currentPlayer.rank}${randomSuit()}`, 1, this.currentPlayer.sessionId, false));
+        }
+        const nextPlayerId = this.declaration.playerId;
         this.currentTurn = nextPlayerId;
         this.friends.add(nextPlayerId);
         const dealerHand = this.currentPlayer.hand;
         dealerHand.push(...this.deck);
         this.players.forEach(p => p.hand.sort((a, b) => compareCards(a, b, this.declared!)));
-        return { dealer: this.currentTurn, bottom: this.deck }; // Should be sent to declared.player
+        return { dealer: this.currentTurn, bottom: this.deck.toArray() }; // Should be sent to declared.player
     }
 
     endBottomPhase(playerId: string, bottom: Card[], friendCalls: FriendCall[]) {
@@ -186,7 +194,7 @@ export class GameState extends Schema {
         for (const card of bottom) {
             dealerHand.splice(dealerHand.findIndex(c => c === card), 1);
         }
-        this.bottom = bottom;
+        this.bottom = new ArraySchema<Card>(...bottom);
         this.friendCalls = new ArraySchema<FriendCall>(...friendCalls);
         this.phase = 'play';
     }
@@ -243,6 +251,10 @@ export class GameState extends Schema {
         }
         this.incrementTurn();
         return forced ? { forcedPlay: play[0] } : null;
+    }
+
+    private get declaration() {
+        return this.declarations[this.declarations.length - 1];
     }
 
     private get currentPlayer() {
@@ -347,7 +359,7 @@ export class GameState extends Schema {
                 gameWinners.push(p);
             }
         }
-        return { winners, levelChange, gameWinners, points, bottom: this.bottom };
+        return { winners, levelChange, gameWinners, points, bottom: this.bottom.toArray() };
     }
 
     private incrementTurn() {

@@ -19,7 +19,7 @@ export class Player extends Schema {
 
   @type('number') index: number;
 
-  @filter(function (this: Player, client: Client, value: Card, root: Schema) {
+  @filter(function (this: Player, client: Client) {
     return client.sessionId === this.sessionId;
   })
   @type(['string']) hand = new ArraySchema<Card>();
