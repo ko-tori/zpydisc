@@ -1,8 +1,8 @@
-import { Card, getPointValue, getSuit, parseCard } from '@zpy/shared';
+import { Card, Declared, getPointValue, getSuit, parseCard } from '@zpy/shared';
 
 interface CardViewProps {
   card: Card;
-  declared?: Card;
+  declared?: Declared;
   selected?: boolean;
   disabled?: boolean;
   compact?: boolean;

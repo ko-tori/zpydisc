@@ -19,6 +19,7 @@ class GameRoom {
   private botCounter = 0;
   private dealTimer: ReturnType<typeof setInterval> | null = null;
   private botTimer: ReturnType<typeof setTimeout> | null = null;
+  private dealEndTime?: number;
 
   constructor(public readonly channelId: string) {}
 
@@ -101,12 +102,7 @@ class GameRoom {
           break;
         }
         case 'endDealPhase': {
-          if (this.game.phase === 'deal' && this.game.deck.length <= this.game.bottomSize) {
-            this.clearTimers();
-            this.game.endDealPhase();
-            this.broadcastState();
-            this.scheduleBotAction();
-          }
+          // Fixed 5-second overturn window after dealing; cannot skip early
           break;
         }
         case 'endBottomPhase': {
@@ -123,6 +119,14 @@ class GameRoom {
           this.game.makePlay(playerIndex, msg.cards);
           this.broadcastState();
           this.scheduleBotAction();
+          break;
+        }
+        case 'resetGame': {
+          const didReset = this.game.voteReset(userId);
+          if (didReset) {
+            this.clearTimers();
+          }
+          this.broadcastState();
           break;
         }
         default:
@@ -157,20 +161,21 @@ class GameRoom {
         }
         this.broadcastState();
       } else {
-        // Finished dealing all non-bottom cards
+        // Finished dealing all non-bottom cards — fixed 5s window to allow overturns
         if (this.dealTimer) {
           clearInterval(this.dealTimer);
           this.dealTimer = null;
         }
+        this.dealEndTime = Date.now() + 5000;
         this.broadcastState();
-        // Auto-advance to bottom phase after a 4s declaration grace period
         this.botTimer = setTimeout(() => {
+          this.dealEndTime = undefined;
           if (this.game.phase === 'deal') {
             this.game.endDealPhase();
             this.broadcastState();
             this.scheduleBotAction();
           }
-        }, 4000);
+        }, 5000);
       }
     }, interval);
   }
@@ -221,6 +226,7 @@ class GameRoom {
       clearTimeout(this.botTimer);
       this.botTimer = null;
     }
+    this.dealEndTime = undefined;
   }
 
   private sendTo(userId: string, msg: ServerMessage): void {
@@ -234,9 +240,13 @@ class GameRoom {
     for (const [userId, client] of this.clients) {
       if (client.ws.readyState !== WebSocket.OPEN) continue;
       const idx = this.game.players.findIndex((p) => p.id === userId);
+      const view = this.game.getClientView(idx);
+      if (this.dealEndTime !== undefined) {
+        view.dealEndTime = this.dealEndTime;
+      }
       const msg: ServerMessage = {
         type: 'state',
-        state: this.game.getClientView(idx),
+        state: view,
       };
       client.ws.send(JSON.stringify(msg));
     }

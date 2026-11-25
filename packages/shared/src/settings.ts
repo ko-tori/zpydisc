@@ -6,19 +6,17 @@ export interface GameSettings {
   teamSize?: number;
   bottomSize?: number;
   cutoffPerDeck: number;
-  bottomMultiplier: number;
   dealIntervalMs: number;
 }
 
 export const DEFAULT_SETTINGS: GameSettings = {
   numDecks: 2,
   wraparound: true,
-  winnersDeclare: false,
+  winnersDeclare: true,
   rallyScoring: true,
   teamSize: undefined,
   bottomSize: undefined,
   cutoffPerDeck: 40,
-  bottomMultiplier: 2,
   dealIntervalMs: 120,
 };
 

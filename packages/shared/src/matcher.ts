@@ -1,4 +1,4 @@
-import { Card, countCards, getSuit, nextLargest } from './cards.js';
+import { Card, Declared, countCards, getSuit, nextLargest } from './cards.js';
 import { Play } from './play.js';
 
 export interface Shape {
@@ -20,7 +20,7 @@ function getL(p: Possibility): number {
  * Sorts a copy of `possibilities` from largest to smallest by (m*l, m),
  * with concrete Plays before wildcard Shapes of the same (m, l).
  */
-export function sortPossibilities(possibilities: Possibility[], declared?: Card): Possibility[] {
+export function sortPossibilities(possibilities: Possibility[], declared?: Declared): Possibility[] {
   return [...possibilities].sort((p1, p2) => {
     const m1 = getM(p1);
     const m2 = getM(p2);
@@ -59,7 +59,7 @@ function comparePossibilityPriority(a: Possibility[], b: Possibility[]): number 
   return sb.length - sa.length;
 }
 
-function canonicalKey(possibility: Possibility[], declared: Card): string {
+function canonicalKey(possibility: Possibility[], declared: Declared): string {
   return sortPossibilities(possibility, declared)
     .map((p) => (p instanceof Play ? `P:${p.card}:${p.multiplicity}x${p.length}` : `S:${p.m}x${p.l}`))
     .join('|');
@@ -93,7 +93,7 @@ function buildTractorTable(
   counts: Map<Card, number>,
   maxM: number,
   maxL: number,
-  declared: Card,
+  declared: Declared,
   wrap: boolean
 ): Map<Card, Card>[][] {
   if (maxM < 2 || maxL < 1) return [];
@@ -129,7 +129,7 @@ function buildTractorTable(
 function removePlayFromCounts(
   counts: Map<Card, number>,
   play: Play,
-  declared: Card,
+  declared: Declared,
   wrap: boolean
 ): Map<Card, number> {
   const next = new Map(counts);
@@ -154,7 +154,7 @@ function removePlayFromCounts(
 export function decomposeThrow(
   cards: Card[],
   maxMultiplicity: number,
-  declared: Card,
+  declared: Declared,
   wrap = true
 ): Play[] {
   if (cards.length === 0) return [];
@@ -215,7 +215,7 @@ export function decomposeThrow(
 export function cardsMatchPossibility(
   cards: Card[],
   possibility: Possibility[],
-  declared: Card,
+  declared: Declared,
   wrap = true
 ): boolean {
   const remaining = countCards(cards);
@@ -269,7 +269,7 @@ export function cardsMatchPossibility(
 export function matchesPossibility(
   play: Play[],
   possibility: Possibility[],
-  declared: Card,
+  declared: Declared,
   wrap = true
 ): boolean {
   const cards = play.flatMap((p) => p.getCards(declared, wrap));
@@ -286,7 +286,7 @@ export class Matcher {
   constructor(
     private counts: Map<Card, number>,
     trick: Play[],
-    private declared: Card,
+    private declared: Declared,
     private wrap = true
   ) {
     if (trick.length === 0) {
@@ -433,7 +433,7 @@ export class Matcher {
     return nextMatcher.getPossibilities().map((rest) => [play, ...rest]);
   }
 
-  static fromHand(hand: Card[], trick: Play[], declared: Card, wrap = true): Matcher {
+  static fromHand(hand: Card[], trick: Play[], declared: Declared, wrap = true): Matcher {
     return new Matcher(countCards(hand), trick, declared, wrap);
   }
 }
@@ -445,7 +445,7 @@ export function selectableCards(
   hand: Card[],
   selection: Card[],
   trick: Play[],
-  declared: Card,
+  declared: Declared,
   wrap = true
 ): Set<Card> {
   if (trick.length === 0) {

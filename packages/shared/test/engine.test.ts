@@ -146,3 +146,267 @@ describe('ZpyGame full round simulation with bots', () => {
     expect(game.players.every((p) => p.hand.length === 0)).toBe(true);
   });
 });
+
+describe('rejected throws', () => {
+  function setupPlayPhase(hands: Card[][], declared: Card = '2S'): ZpyGame {
+    const game = new ZpyGame({ numDecks: 2, wraparound: true });
+    hands.forEach((_, i) => game.addPlayer(`p${i}`, `P${i}`, '', false));
+    game.phase = 'play';
+    game.declared = declared;
+    game.dealerIndex = 0;
+    game.currentTurn = 0;
+    game.trickLeader = 0;
+    hands.forEach((h, i) => {
+      game.players[i].hand = [...h];
+    });
+    return game;
+  }
+
+  it('forces the beaten pair when throwing A + 55 against KK', () => {
+    const game = setupPlayPhase([
+      ['AC', '5C', '5C', '3D'],
+      ['KC', 'KC', '4D', '5D'],
+    ]);
+    const res = game.makePlay(0, ['AC', '5C', '5C']);
+    expect(res).toEqual({
+      type: 'rejected_throw',
+      forcedPlay: { card: '5C', multiplicity: 2, length: 1 },
+    });
+    expect(game.currentTrick[0].cards).toEqual(['5C', '5C']);
+    expect(game.players[0].hand).toEqual(['AC', '3D']);
+  });
+
+  it('forces the smallest losing set when multiple components are beaten', () => {
+    const game = setupPlayPhase([
+      ['KC', 'KC', '5C', '3D'],
+      ['AC', 'AC', '4D', '5D'],
+    ]);
+    const res = game.makePlay(0, ['KC', 'KC', '5C']);
+    expect(res).toEqual({
+      type: 'rejected_throw',
+      forcedPlay: { card: '5C', multiplicity: 1, length: 1 },
+    });
+    expect(game.currentTrick[0].cards).toEqual(['5C']);
+    expect(game.players[0].hand).toEqual(['KC', 'KC', '3D']);
+  });
+
+  it('forces the beaten tractor when throwing 4455 + A against 6677', () => {
+    const game = setupPlayPhase([
+      ['4C', '4C', '5C', '5C', 'AC'],
+      ['6C', '6C', '7C', '7C', '3D'],
+    ]);
+    const res = game.makePlay(0, ['4C', '4C', '5C', '5C', 'AC']);
+    expect(res).toEqual({
+      type: 'rejected_throw',
+      forcedPlay: { card: '4C', multiplicity: 2, length: 2 },
+    });
+    expect(game.currentTrick[0].cards).toEqual(['4C', '4C', '5C', '5C']);
+    expect(game.players[0].hand).toEqual(['AC']);
+  });
+
+  it('allows valid throws when no opponent holds a beating set', () => {
+    const game = setupPlayPhase([
+      ['KC', 'KC', '3C', '3C'],
+      ['AC', '4D', '5D', '6D'],
+    ]);
+    const res = game.makePlay(0, ['KC', 'KC', '3C', '3C']);
+    expect(res).toBeNull();
+    expect(game.currentTrick[0].cards).toEqual(['KC', 'KC', '3C', '3C']);
+    expect(game.players[0].hand).toEqual([]);
+  });
+});
+
+describe('scoring table & winners-only declare', () => {
+  function finishRoundWithDefenderPoints(
+    defenderPoints: number,
+    friends: number[] = [0, 1]
+  ): { game: ZpyGame; result: ReturnType<ZpyGame['makePlay']> } {
+    const game = new ZpyGame({ numDecks: 2 });
+    for (let i = 0; i < 4; i++) {
+      game.addPlayer(`p${i}`, `P${i}`, '', false);
+    }
+    game.phase = 'play';
+    game.declared = '2S';
+    game.dealerIndex = 0;
+    game.teamSize = 2;
+    game.friends = new Set(friends);
+    game.bottom = [];
+    game.currentTurn = 0;
+    game.trickLeader = 0;
+
+    // Seed defender points on player 2 using 5-point cards
+    const fiveCount = Math.floor(defenderPoints / 5);
+    game.players[2].points = Array.from({ length: fiveCount }, () => '5C' as Card);
+
+    // Final 1-card trick won by dealer (player 0) so bottom isn't captured
+    game.players[0].hand = ['BJ'];
+    game.players[1].hand = ['3C'];
+    game.players[2].hand = ['4C'];
+    game.players[3].hand = ['6C'];
+
+    game.makePlay(0, ['BJ']);
+    game.makePlay(1, ['3C']);
+    game.makePlay(2, ['4C']);
+    const result = game.makePlay(3, ['6C']);
+    return { game, result };
+  }
+
+  it('defaults winnersDeclare to true', () => {
+    expect(new ZpyGame().settings.winnersDeclare).toBe(true);
+  });
+
+  it('levels up dealer team by +3 (0 pts), +2 (<40 pts), +1 (40-75 pts) and applies solo multiplier', () => {
+    const r0 = finishRoundWithDefenderPoints(0);
+    expect(r0.game.lastRoundResult?.levelChange).toBe(3);
+    expect(r0.game.players[0].rank).toBe('5');
+    expect(r0.game.players[1].rank).toBe('5');
+    expect(r0.game.players[2].rank).toBe('2');
+
+    const r35 = finishRoundWithDefenderPoints(35);
+    expect(r35.game.lastRoundResult?.levelChange).toBe(2);
+    expect(r35.game.players[0].rank).toBe('4');
+
+    const r40 = finishRoundWithDefenderPoints(40);
+    expect(r40.game.lastRoundResult?.levelChange).toBe(1);
+    expect(r40.game.players[0].rank).toBe('3');
+
+    // Solo dealer (1v3) doubles level gain: 40 pts -> +1 * 2 = +2
+    const rSolo = finishRoundWithDefenderPoints(40, [0]);
+    expect(rSolo.game.lastRoundResult?.levelChange).toBe(2);
+    expect(rSolo.game.players[0].rank).toBe('4');
+  });
+
+  it('gives defenders +0 levels when winning and restricts next-round declarations to them', () => {
+    const { game } = finishRoundWithDefenderPoints(160);
+    expect(game.lastRoundResult?.winners).toEqual([2, 3]);
+    expect(game.lastRoundResult?.levelChange).toBe(0);
+    expect(game.players.every((p) => p.rank === '2')).toBe(true);
+
+    // Start next round: only defenders (players 2 & 3) may declare
+    game.startRound();
+    game.players[0].hand = ['2H'];
+    game.players[2].hand = ['2D'];
+    expect(() => game.declare(0, '2H', 1)).toThrow('Only previous round winners may declare.');
+    expect(game.declare(2, '2D', 1).player).toBe(2);
+  });
+});
+
+describe('no-trump joker overturns & non-trump friend calls', () => {
+  it('allows overturning with a pair of jokers (SJ > rank cards, BJ > SJ) to remove trump suit', () => {
+    const game = new ZpyGame({ numDecks: 2 });
+    for (let i = 0; i < 4; i++) {
+      game.addPlayer(`p${i}`, `P${i}`, '', false);
+    }
+    game.startRound();
+    game.players[0].hand = ['2S', '2S'];
+    game.players[1].hand = ['SJ', 'SJ'];
+    game.players[2].hand = ['BJ', 'BJ'];
+
+    // Single joker cannot declare
+    expect(() => game.declare(1, 'SJ', 1)).toThrow('Must use at least a pair of jokers');
+
+    // 2x 2S sets Spades trump
+    game.declare(0, '2S', 2);
+    expect(game.declared).toBe('2S');
+
+    // 2x SJ overturns 2x 2S and removes trump suit (2NT)
+    game.declare(1, 'SJ', 2);
+    expect(game.declared).toBe('2NT');
+
+    // 2x BJ overturns 2x SJ (still 2NT)
+    game.declare(2, 'BJ', 2);
+    expect(game.declared).toBe('2NT');
+
+    // In 2NT: only jokers and 2s are trump, and all 2s are equal
+    expect(compareCards('2S', '2C', '2NT')).toBe(0);
+    expect(compareCards('2H', '2D', '2NT')).toBe(0);
+    expect(compareCards('SJ', '2S', '2NT')).toBeGreaterThan(0);
+    expect(compareCards('2C', 'AS', '2NT')).toBeGreaterThan(0);
+    expect(compareCards('AS', 'AC', '2NT')).toBe(0);
+  });
+
+  it('rejects calling any trump card (trump suit, rank card, or joker) as a friend', () => {
+    const game = new ZpyGame({ numDecks: 2 });
+    for (let i = 0; i < 4; i++) {
+      game.addPlayer(`p${i}`, `P${i}`, '', false);
+    }
+    game.phase = 'bottom';
+    game.declared = '2S';
+    game.dealerIndex = 0;
+    game.teamSize = 2;
+    game.bottomSize = 2;
+    game.players[0].hand = ['3C', '4C', '5C'];
+
+    expect(() => game.endBottomPhase(['3C', '4C'], [{ card: 'AS', nth: 1 }])).toThrow(
+      'Cannot call a trump card as a friend.'
+    );
+    expect(() => game.endBottomPhase(['3C', '4C'], [{ card: '2H', nth: 1 }])).toThrow(
+      'Cannot call a trump card as a friend.'
+    );
+    expect(() => game.endBottomPhase(['3C', '4C'], [{ card: 'BJ', nth: 1 }])).toThrow(
+      'Cannot call a trump card as a friend.'
+    );
+
+    // Non-trump card succeeds
+    expect(() => game.endBottomPhase(['3C', '4C'], [{ card: 'AC', nth: 1 }])).not.toThrow();
+    expect(game.phase).toBe('play');
+  });
+
+  it('multiplies bottom points by last winning play size * 2 (pair -> 4x, 6-card tractor -> 12x)', () => {
+    // Pair winning last trick -> 4x (10 pts in bottom -> 40 pts)
+    const gPair = new ZpyGame({ numDecks: 2 });
+    for (let i = 0; i < 2; i++) gPair.addPlayer(`p${i}`, `P${i}`, '', false);
+    gPair.phase = 'play';
+    gPair.declared = '2S';
+    gPair.dealerIndex = 0;
+    gPair.friends = new Set([0]);
+    gPair.bottom = ['10D']; // 10 pts
+    gPair.currentTurn = 0;
+    gPair.trickLeader = 0;
+    gPair.players[0].hand = ['3C', '3C'];
+    gPair.players[1].hand = ['AC', 'AC']; // defender wins with pair
+    gPair.makePlay(0, ['3C', '3C']);
+    gPair.makePlay(1, ['AC', 'AC']);
+    expect(gPair.lastRoundResult?.bottomMultiplier).toBe(4);
+    expect(gPair.lastRoundResult?.bottomPoints).toBe(40);
+
+    // 6-card tractor winning last trick -> 12x (10 pts in bottom -> 120 pts)
+    const gTractor = new ZpyGame({ numDecks: 2 });
+    for (let i = 0; i < 2; i++) gTractor.addPlayer(`p${i}`, `P${i}`, '', false);
+    gTractor.phase = 'play';
+    gTractor.declared = '2S';
+    gTractor.dealerIndex = 0;
+    gTractor.friends = new Set([0]);
+    gTractor.bottom = ['KD']; // 10 pts
+    gTractor.currentTurn = 0;
+    gTractor.trickLeader = 0;
+    gTractor.players[0].hand = ['3C', '3C', '4C', '4C', '5C', '5C'];
+    gTractor.players[1].hand = ['8C', '8C', '9C', '9C', '10C', '10C']; // defender wins with 2x3 tractor
+    gTractor.makePlay(0, ['3C', '3C', '4C', '4C', '5C', '5C']);
+    gTractor.makePlay(1, ['8C', '8C', '9C', '9C', '10C', '10C']);
+    expect(gTractor.lastRoundResult?.bottomMultiplier).toBe(12);
+    expect(gTractor.lastRoundResult?.bottomPoints).toBe(120);
+  });
+
+  it('requires unanimous vote from all human players to reset the game', () => {
+    const game = new ZpyGame({ numDecks: 2 });
+    game.addPlayer('h1', 'Alice', '', false);
+    game.addPlayer('h2', 'Bob', '', false);
+    game.addPlayer('b1', 'Bot 1', '', true);
+    game.startRound();
+
+    expect(game.voteReset('h1')).toBe(false);
+    expect(game.phase).toBe('deal');
+    expect([...game.resetVotes]).toEqual(['h1']);
+
+    // Toggling cancels vote
+    expect(game.voteReset('h1')).toBe(false);
+    expect([...game.resetVotes]).toEqual([]);
+
+    // Both humans voting resets to lobby
+    expect(game.voteReset('h1')).toBe(false);
+    expect(game.voteReset('h2')).toBe(true);
+    expect(game.phase).toBe('lobby');
+    expect([...game.resetVotes]).toEqual([]);
+  });
+});

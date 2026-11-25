@@ -17,7 +17,8 @@ export type ClientMessage =
   | { type: 'declare'; card: Card; amount: number }
   | { type: 'endDealPhase' }
   | { type: 'endBottomPhase'; bottom: Card[]; friendCalls: { card: Card; nth: number }[] }
-  | { type: 'makePlay'; cards: Card[] };
+  | { type: 'makePlay'; cards: Card[] }
+  | { type: 'resetGame' };
 
 export type ServerMessage =
   | { type: 'state'; state: ClientGameState }

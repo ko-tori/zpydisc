@@ -81,7 +81,7 @@ export function Lobby({ state, identity, send }: LobbyProps) {
                   })
                 }
               >
-                {[1, 2, 3, 4].map((d) => (
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((d) => (
                   <option key={d} value={d}>
                     {d} Deck{d > 1 ? 's' : ''}
                   </option>
@@ -115,25 +115,6 @@ export function Lobby({ state, identity, send }: LobbyProps) {
                   })
                 }
               />
-            </label>
-
-            <label className="setting-row">
-              <span>Bottom Point Multiplier</span>
-              <select
-                value={settings.bottomMultiplier}
-                onChange={(e) =>
-                  send({
-                    type: 'updateSettings',
-                    settings: { bottomMultiplier: Number(e.target.value) },
-                  })
-                }
-              >
-                {[1, 2, 3, 4].map((m) => (
-                  <option key={m} value={m}>
-                    {m}x
-                  </option>
-                ))}
-              </select>
             </label>
           </div>
 

@@ -1,4 +1,4 @@
-import { Card, EffectiveSuit, compareCards, getSuit, nextLargest, parseCard } from './cards.js';
+import { Card, Declared, EffectiveSuit, compareCards, getSuit, nextLargest, parseCard } from './cards.js';
 
 export interface PlayData {
   card: Card;
@@ -34,20 +34,20 @@ export class Play {
     return this.multiplicity * this.length;
   }
 
-  getSuit(declared: Card): EffectiveSuit {
+  getSuit(declared: Declared): EffectiveSuit {
     return getSuit(this.card, declared);
   }
 
   /**
    * True if this play is an Ace-low wraparound tractor (e.g. AA22, AA2233).
    */
-  isWraparound(declared: Card): boolean {
+  isWraparound(declared: Declared): boolean {
     if (this.length <= 1) return false;
     const [num] = parseCard(this.card);
     return num === 'A' && getSuit(this.card, declared) !== 'T';
   }
 
-  getCards(declared: Card, wrap = true): Card[] {
+  getCards(declared: Declared, wrap = true): Card[] {
     const cards: Card[] = [];
     let curCard: Card | null = this.card;
     for (let i = 0; i < this.length; i++) {
@@ -82,7 +82,7 @@ export class Play {
    * Compares two plays of the same shape (m, l) in the same suit.
    * Wraparound tractors (Ace-low, e.g. AA22) are the lowest tractors in their suit.
    */
-  static compareStrength(p1: Play, p2: Play, declared: Card): number {
+  static compareStrength(p1: Play, p2: Play, declared: Declared): number {
     const w1 = p1.isWraparound(declared);
     const w2 = p2.isWraparound(declared);
     if (w1 && !w2) return -1;
@@ -94,7 +94,7 @@ export class Play {
   /**
    * Sorts plays ascending by (size, multiplicity, card strength).
    */
-  static sortPlays(plays: Play[], declared?: Card): Play[] {
+  static sortPlays(plays: Play[], declared?: Declared): Play[] {
     return [...plays].sort((p1, p2) => {
       const sizeDiff = p1.size - p2.size;
       if (sizeDiff !== 0) return sizeDiff;
@@ -111,7 +111,7 @@ export class Play {
    * Returns true if `currentWinner` (played earlier) remains the winner against `challenger`.
    * Both arrays should be sorted descending by (size, multiplicity).
    */
-  static winsAgainst(currentWinner: Play[], challenger: Play[], declared: Card): boolean {
+  static winsAgainst(currentWinner: Play[], challenger: Play[], declared: Declared): boolean {
     if (currentWinner.length !== challenger.length) return true;
     const s1 = currentWinner[0].getSuit(declared);
     const s2 = challenger[0].getSuit(declared);

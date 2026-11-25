@@ -1,4 +1,4 @@
-import { DiscordSDK, DiscordSDKMock } from '@discord/embedded-app-sdk';
+import { DiscordSDK } from '@discord/embedded-app-sdk';
 
 export interface DiscordIdentity {
   userId: string;
@@ -21,19 +21,23 @@ function getLocalParam(key: string, defaultValue?: string): string {
   return value;
 }
 
-export async function initDiscordIdentity(): Promise<DiscordIdentity> {
+let cachedIdentityPromise: Promise<DiscordIdentity> | null = null;
+
+export function initDiscordIdentity(onStatus?: (msg: string) => void): Promise<DiscordIdentity> {
+  if (!cachedIdentityPromise) {
+    cachedIdentityPromise = createDiscordIdentity(onStatus).catch((err) => {
+      cachedIdentityPromise = null;
+      throw err;
+    });
+  }
+  return cachedIdentityPromise;
+}
+
+async function createDiscordIdentity(onStatus?: (msg: string) => void): Promise<DiscordIdentity> {
   if (!isEmbedded) {
     const userId = getLocalParam('user_id');
     const name = queryParams.get('name') ?? userId;
     const channelId = getLocalParam('channel_id', 'local-table');
-    // Instantiate mock SDK for local parity
-    const mock = new DiscordSDKMock(
-      import.meta.env.VITE_CLIENT_ID ?? 'local-dev-client',
-      'local-guild',
-      channelId,
-      'local-location'
-    );
-    await mock.ready();
     return {
       userId,
       name,
@@ -45,12 +49,14 @@ export async function initDiscordIdentity(): Promise<DiscordIdentity> {
 
   const clientId = import.meta.env.VITE_CLIENT_ID;
   if (!clientId) {
-    throw new Error('Missing VITE_CLIENT_ID environment variable.');
+    throw new Error('Missing VITE_CLIENT_ID in .env (restart dev server after adding .env).');
   }
 
+  onStatus?.('Waiting for Discord SDK ready...');
   const discordSdk = new DiscordSDK(clientId);
   await discordSdk.ready();
 
+  onStatus?.('Authorizing with Discord...');
   const { code } = await discordSdk.commands.authorize({
     client_id: clientId,
     response_type: 'code',
@@ -59,6 +65,7 @@ export async function initDiscordIdentity(): Promise<DiscordIdentity> {
     scope: ['identify', 'guilds'],
   });
 
+  onStatus?.('Exchanging OAuth2 token...');
   const tokenRes = await fetch('/api/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -66,9 +73,12 @@ export async function initDiscordIdentity(): Promise<DiscordIdentity> {
   });
 
   if (!tokenRes.ok) {
-    throw new Error('Failed to exchange Discord OAuth2 token.');
+    const detail = await tokenRes.text().catch(() => '');
+    throw new Error(`Token exchange failed (${tokenRes.status}): ${detail}`);
   }
   const { access_token } = (await tokenRes.json()) as { access_token: string };
+
+  onStatus?.('Authenticating with Discord...');
   const auth = await discordSdk.commands.authenticate({ access_token });
   const user = auth.user;
 

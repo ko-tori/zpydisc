@@ -2,9 +2,11 @@ import {
   BASIC_NUMS,
   BasicNum,
   Card,
+  Declared,
   compareCardsForSort,
   countCards,
   createDeck,
+  formatCard,
   getPointValue,
   getSuit,
   parseCard,
@@ -17,6 +19,7 @@ export type GamePhase = 'lobby' | 'deal' | 'bottom' | 'play' | 'score';
 
 export interface Declaration {
   card: Card;
+  declared: Declared;
   amount: number;
   player: number;
   canPrevPlayerReinforce: boolean;
@@ -56,6 +59,7 @@ export interface RoundResult {
   gameWinners: number[];
   points: number;
   bottomPoints: number;
+  bottomMultiplier: number;
   bottomCapturedByDefenders: boolean;
   bottom: Card[];
 }
@@ -92,9 +96,10 @@ export interface ClientGameState {
   myHand: Card[];
   bottomSize: number;
   bottom: Card[]; // Only revealed in score phase or to dealer in bottom phase
-  declared?: Card;
+  declared?: Declared;
   declarations: Declaration[];
   dealerIndex: number;
+  winners: number[];
   teamSize: number;
   friendCalls: FriendCall[];
   currentTurn: number;
@@ -102,6 +107,8 @@ export interface ClientGameState {
   currentTrick: TrickEntry[];
   lastTrick: TrickEntry[];
   deckRemaining: number;
+  dealEndTime?: number;
+  resetVotes: string[];
   lastRoundResult?: RoundResult;
   lastNotice?: string;
 }
@@ -114,7 +121,7 @@ export class ZpyGame {
   public bottom: Card[] = [];
   public bottomSize = 8;
   public teamSize = 2;
-  public declared?: Card;
+  public declared?: Declared;
   public declarations: Declaration[] = [];
   public dealerIndex = 0;
   public friendCalls: FriendCall[] = [];
@@ -124,6 +131,7 @@ export class ZpyGame {
   public trickLeader = 0;
   public currentTrick: { player: number; plays: Play[]; cards: Card[] }[] = [];
   public lastTrick: { player: number; plays: Play[]; cards: Card[] }[] = [];
+  public resetVotes = new Set<string>();
   public lastRoundResult?: RoundResult;
   public lastNotice?: string;
 
@@ -158,6 +166,7 @@ export class ZpyGame {
     if (idx === -1) return;
     if (this.phase === 'lobby') {
       this.players.splice(idx, 1);
+      this.resetVotes.delete(id);
     }
   }
 
@@ -166,6 +175,48 @@ export class ZpyGame {
       throw new Error('Settings can only be updated in lobby or between rounds.');
     }
     this.settings = { ...this.settings, ...partial };
+  }
+
+  voteReset(userId: string): boolean {
+    const player = this.players.find((p) => p.id === userId && !p.isBot);
+    if (!player) {
+      throw new Error('Only seated human players can vote to reset.');
+    }
+    if (this.resetVotes.has(userId)) {
+      this.resetVotes.delete(userId);
+      return false;
+    }
+    this.resetVotes.add(userId);
+    const humans = this.players.filter((p) => !p.isBot);
+    if (humans.every((h) => this.resetVotes.has(h.id))) {
+      this.resetGame();
+      return true;
+    }
+    return false;
+  }
+
+  resetGame(): void {
+    this.phase = 'lobby';
+    this.deck = [];
+    this.bottom = [];
+    this.declared = undefined;
+    this.declarations = [];
+    this.dealerIndex = 0;
+    this.friendCalls = [];
+    this.friends = new Set();
+    this.winners = [];
+    this.currentTurn = 0;
+    this.trickLeader = 0;
+    this.currentTrick = [];
+    this.lastTrick = [];
+    this.resetVotes.clear();
+    this.lastRoundResult = undefined;
+    this.lastNotice = undefined;
+    for (const p of this.players) {
+      p.rank = '2';
+      p.hand = [];
+      p.points = [];
+    }
   }
 
   startRound(): void {
@@ -202,6 +253,7 @@ export class ZpyGame {
     this.friends = new Set();
     this.currentTrick = [];
     this.lastTrick = [];
+    this.resetVotes.clear();
     this.lastRoundResult = undefined;
     this.lastNotice = undefined;
     this.currentTurn = this.dealerIndex % this.players.length;
@@ -234,8 +286,12 @@ export class ZpyGame {
     const player = this.players[playerIndex];
     if (!player) throw new Error('Invalid player.');
     const [num, suit] = parseCard(card);
-    if (suit === 'J') throw new Error('Cannot declare with jokers.');
-    if (num !== player.rank) {
+    const isJoker = suit === 'J';
+    if (isJoker) {
+      if (amount < 2) {
+        throw new Error('Must use at least a pair of jokers to declare no-trump.');
+      }
+    } else if (num !== player.rank) {
       throw new Error(`Must declare with your current rank (${player.rank}).`);
     }
     if (this.settings.winnersDeclare && !this.winners.includes(playerIndex)) {
@@ -246,32 +302,45 @@ export class ZpyGame {
       throw new Error('Not enough copies of that card in hand to declare.');
     }
 
+    const tier = (c: Card) => (c === 'BJ' ? 2 : c === 'SJ' ? 1 : 0);
     const prev = this.declarations[this.declarations.length - 1];
     if (prev) {
-      if (amount === prev.amount && prev.canPrevPlayerReinforce) {
+      const sameTier = tier(card) === tier(prev.card);
+      const higherTier = tier(card) > tier(prev.card);
+      if (amount > prev.amount) {
+        // Strictly more cards always overturns
+      } else if (amount === prev.amount && higherTier) {
+        // Same count of jokers (SJ > rank cards, BJ > SJ) overturns
+      } else if (amount === prev.amount && sameTier && prev.canPrevPlayerReinforce) {
         const orig = this.declarations[this.declarations.length - 2];
         if (!orig || orig.player !== playerIndex || orig.card !== card) {
           throw new Error('Invalid reinforce declaration.');
         }
-      } else if (amount <= prev.amount) {
-        throw new Error('Must declare with more cards to overturn.');
+      } else {
+        throw new Error('Declaration is not strong enough to overturn.');
       }
     }
 
     const canPrevPlayerReinforce = prev
       ? prev.amount < amount &&
+        tier(prev.card) === tier(card) &&
         this.players[prev.player].hand.filter((c) => c === prev.card).length >= amount
       : false;
 
+    const declaredValue: Declared = isJoker
+      ? (`${player.rank}NT` as Declared)
+      : (card as Declared);
+
     const declaration: Declaration = {
       card,
+      declared: declaredValue,
       amount,
       player: playerIndex,
       canPrevPlayerReinforce,
       prevPlayer: canPrevPlayerReinforce ? prev.player : undefined,
     };
     this.declarations.push(declaration);
-    this.declared = card;
+    this.declared = declaredValue;
 
     // Re-sort all hands with the new trump suit
     for (const p of this.players) {
@@ -280,7 +349,7 @@ export class ZpyGame {
     return declaration;
   }
 
-  endDealPhase(): { dealer: number; bottom: Card[]; declared: Card } {
+  endDealPhase(): { dealer: number; bottom: Card[]; declared: Declared } {
     if (this.phase !== 'deal') {
       throw new Error('Not in deal phase.');
     }
@@ -290,15 +359,15 @@ export class ZpyGame {
 
     if (this.declarations.length > 0) {
       const last = this.declarations[this.declarations.length - 1];
-      this.declared = last.card;
+      this.declared = last.declared;
       this.dealerIndex = last.player;
     } else {
-      // Fallback if nobody declared: flip first non-joker card in bottom, or default to 2S
+      // Fallback if nobody declared: flip first non-joker card in bottom, or default to S
       const dealer = this.winners[0] ?? 0;
       const rank = this.players[dealer].rank;
       const flipped = this.deck.find((c) => parseCard(c)[1] !== 'J');
       const suit = flipped ? parseCard(flipped)[1] : 'S';
-      this.declared = `${rank}${suit === 'J' ? 'S' : suit}` as Card;
+      this.declared = `${rank}${suit === 'J' ? 'S' : suit}` as Declared;
       this.dealerIndex = dealer;
       this.lastNotice = `No declaration made — trump defaulted to ${this.declared}.`;
     }
@@ -334,6 +403,15 @@ export class ZpyGame {
     }
     if (!this.hasCards(this.dealerIndex, bottom)) {
       throw new Error('Bottom contains cards not in dealer hand.');
+    }
+    const declared = this.declared!;
+    for (const fc of friendCalls) {
+      if (getSuit(fc.card, declared) === 'T') {
+        throw new Error('Cannot call a trump card as a friend.');
+      }
+      if (fc.nth < 1 || fc.nth > this.settings.numDecks) {
+        throw new Error(`Friend call occurrence must be between 1 and ${this.settings.numDecks}.`);
+      }
     }
 
     const dealerHand = this.players[this.dealerIndex].hand;
@@ -385,9 +463,10 @@ export class ZpyGame {
         const beaten = this.findBeatenThrowComponent(playerIndex, plays);
         if (beaten) {
           forcedPlay = beaten;
+          const attempted = cardsToPlay.map(formatCard).join(' ');
           plays = [beaten];
           cardsToPlay = beaten.getCards(declared, this.settings.wraparound);
-          this.lastNotice = `${this.players[playerIndex].name}'s throw was rejected! Forced to play ${cardsToPlay.join(', ')}.`;
+          this.lastNotice = `${this.players[playerIndex].name}'s throw (${attempted}) was rejected! Forced to play ${cardsToPlay.map(formatCard).join(' ')}.`;
         } else {
           this.lastNotice = undefined;
         }
@@ -461,7 +540,7 @@ export class ZpyGame {
 
     // Check if trick is complete
     if (this.currentTrick.length === this.players.length) {
-      const { winner, points } = this.concludeTrick();
+      const { winner, winningPlays, points } = this.concludeTrick();
       this.lastTrick = this.currentTrick;
       this.currentTrick = [];
       this.currentTurn = winner;
@@ -473,7 +552,7 @@ export class ZpyGame {
 
       if (this.players.every((p) => p.hand.length === 0)) {
         this.phase = 'score';
-        const roundResult = this.calculateScore(winner);
+        const roundResult = this.calculateScore(winner, winningPlays);
         this.lastRoundResult = roundResult;
         return roundResult;
       }
@@ -507,7 +586,7 @@ export class ZpyGame {
     return null;
   }
 
-  private concludeTrick(): { winner: number; points: Card[] } {
+  private concludeTrick(): { winner: number; winningPlays: Play[]; points: Card[] } {
     const declared = this.declared!;
     let winIdx = 0;
     const points: Card[] = [];
@@ -523,10 +602,14 @@ export class ZpyGame {
         }
       }
     }
-    return { winner: this.currentTrick[winIdx].player, points };
+    return {
+      winner: this.currentTrick[winIdx].player,
+      winningPlays: this.currentTrick[winIdx].plays,
+      points,
+    };
   }
 
-  private calculateScore(lastTrickWinner: number): RoundResult {
+  private calculateScore(lastTrickWinner: number, lastWinningPlays: Play[]): RoundResult {
     const cutoff = this.settings.numDecks * this.settings.cutoffPerDeck;
     let points = 0;
     const defenders: number[] = [];
@@ -541,37 +624,45 @@ export class ZpyGame {
     }
 
     const bottomCapturedByDefenders = !this.friends.has(lastTrickWinner);
+    const largestWinningPlaySize =
+      lastWinningPlays.length > 0
+        ? Math.max(...lastWinningPlays.map((p) => p.size))
+        : 1;
+    const bottomMultiplier = largestWinningPlaySize * 2;
     let bottomPoints = 0;
     if (bottomCapturedByDefenders) {
       for (const c of this.bottom) {
-        bottomPoints += getPointValue(c) * this.settings.bottomMultiplier;
+        bottomPoints += getPointValue(c) * bottomMultiplier;
       }
       points += bottomPoints;
     }
 
     const friendsArr = [...this.friends];
     let winners: number[];
-    let multiplier = 1;
+    let levelChange: number;
     if (points >= cutoff) {
       winners = defenders;
+      // Only the dealer team levels up; defenders win declaration rights for next round
+      levelChange = 0;
     } else {
       winners = friendsArr;
-      multiplier = Math.max(1, this.teamSize - friendsArr.length + 1);
+      const multiplier = Math.max(1, this.teamSize - friendsArr.length + 1);
+      const baseLevels = points === 0 ? 3 : points < cutoff / 2 ? 2 : 1;
+      levelChange = multiplier * baseLevels;
     }
 
-    const baseLevels =
-      points === 0 ? 3 : Math.max(1, Math.abs(Math.floor(((points - cutoff) * 2) / cutoff)));
-    const levelChange = multiplier * baseLevels;
     this.winners = winners;
 
     const gameWinners: number[] = [];
-    for (const idx of winners) {
-      const nextIdx = BASIC_NUMS.indexOf(this.players[idx].rank) + levelChange;
-      if (nextIdx >= BASIC_NUMS.length) {
-        gameWinners.push(idx);
-        this.players[idx].rank = 'A';
-      } else {
-        this.players[idx].rank = BASIC_NUMS[nextIdx];
+    if (levelChange > 0) {
+      for (const idx of winners) {
+        const nextIdx = BASIC_NUMS.indexOf(this.players[idx].rank) + levelChange;
+        if (nextIdx >= BASIC_NUMS.length) {
+          gameWinners.push(idx);
+          this.players[idx].rank = 'A';
+        } else {
+          this.players[idx].rank = BASIC_NUMS[nextIdx];
+        }
       }
     }
 
@@ -587,6 +678,7 @@ export class ZpyGame {
       gameWinners,
       points,
       bottomPoints,
+      bottomMultiplier,
       bottomCapturedByDefenders,
       bottom: [...this.bottom],
     };
@@ -626,6 +718,7 @@ export class ZpyGame {
       declared: this.declared,
       declarations: this.declarations,
       dealerIndex: this.dealerIndex,
+      winners: [...this.winners],
       teamSize: this.teamSize,
       friendCalls: this.friendCalls,
       currentTurn: this.currentTurn,
@@ -641,6 +734,7 @@ export class ZpyGame {
         cards: t.cards,
       })),
       deckRemaining: this.deck.length,
+      resetVotes: [...this.resetVotes],
       lastRoundResult: this.lastRoundResult,
       lastNotice: this.lastNotice,
     };

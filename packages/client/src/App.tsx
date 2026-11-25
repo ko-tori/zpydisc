@@ -3,14 +3,14 @@ import { Lobby } from './components/Lobby';
 import { useGameConnection } from './hooks/useGameConnection';
 
 export function App() {
-  const { identity, state, error, connected, send, clearError } = useGameConnection();
+  const { identity, state, status, error, send, clearError } = useGameConnection();
 
   if (!identity || !state) {
     return (
       <div className="loading">
         <div className="loading__card">
           <h1>Zhaopengyou (找朋友)</h1>
-          <p>{error ? error : connected ? 'Joining table...' : 'Connecting to Discord & server...'}</p>
+          <p>{error ? error : status}</p>
         </div>
       </div>
     );

@@ -8,7 +8,9 @@ import {
   Play,
   countCards,
   formatCard,
+  formatDeclared,
   getPointValue,
+  getSuit,
   selectableCards,
 } from '@zpy/shared';
 import { CardView } from './CardView';
@@ -18,15 +20,28 @@ interface GameTableProps {
   send: (msg: ClientMessage) => void;
 }
 
-const ALL_CALLABLE_CARDS: Card[] = [
-  'BJ',
-  'SJ',
-  ...BASIC_SUITS.flatMap((s) => [...BASIC_NUMS].reverse().map((n) => `${n}${s}` as Card)),
-];
+const ALL_SUITED_CARDS: Card[] = BASIC_SUITS.flatMap((s) =>
+  [...BASIC_NUMS].reverse().map((n) => `${n}${s}` as Card)
+);
 
 export function GameTable({ state, send }: GameTableProps) {
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [showLastTrick, setShowLastTrick] = useState(false);
+  const [dealSecondsLeft, setDealSecondsLeft] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (state.phase !== 'deal' || !state.dealEndTime) {
+      setDealSecondsLeft(null);
+      return;
+    }
+    const update = () => {
+      const remaining = Math.max(0, Math.ceil((state.dealEndTime! - Date.now()) / 1000));
+      setDealSecondsLeft(remaining);
+    };
+    update();
+    const id = setInterval(update, 200);
+    return () => clearInterval(id);
+  }, [state.phase, state.dealEndTime]);
 
   const expectedFriendCalls = Math.max(0, state.teamSize - 1);
   const [friendCalls, setFriendCalls] = useState<{ card: Card; nth: number }[]>([]);
@@ -36,13 +51,26 @@ export function GameTable({ state, send }: GameTableProps) {
     setSelectedIndices([]);
   }, [state.phase, state.myHand.length, state.currentTurn]);
 
+  // Switch back to current trick automatically once the trick leader plays
+  useEffect(() => {
+    if (state.currentTrick.length > 0) {
+      setShowLastTrick(false);
+    }
+  }, [state.currentTrick.length]);
+
+  const callableCards = useMemo(() => {
+    if (!state.declared) return ALL_SUITED_CARDS;
+    return ALL_SUITED_CARDS.filter((c) => getSuit(c, state.declared!) !== 'T');
+  }, [state.declared]);
+
   useEffect(() => {
     if (state.phase === 'bottom') {
+      const defaultCard = callableCards[0] ?? ('AC' as Card);
       setFriendCalls(
-        Array.from({ length: expectedFriendCalls }, () => ({ card: 'AS' as Card, nth: 1 }))
+        Array.from({ length: expectedFriendCalls }, () => ({ card: defaultCard, nth: 1 }))
       );
     }
-  }, [state.phase, expectedFriendCalls]);
+  }, [state.phase, expectedFriendCalls, callableCards]);
 
   const myPlayer = state.myIndex >= 0 ? state.players[state.myIndex] : null;
   const isMyTurn = state.phase === 'play' && state.currentTurn === state.myIndex;
@@ -69,35 +97,59 @@ export function GameTable({ state, send }: GameTableProps) {
     );
   }, [isMyTurn, state.declared, state.currentTrick, state.myHand, selectedCards, state.settings.wraparound]);
 
-  // Available declarations during deal phase
+  // Available declarations during deal phase (including pair+ of jokers for No-Trump)
   const declarationOptions = useMemo(() => {
     if (state.phase !== 'deal' || !myPlayer) return [];
+    if (state.settings.winnersDeclare && !state.winners.includes(state.myIndex)) {
+      return [];
+    }
     const counts = countCards(state.myHand);
     const prev = state.declarations[state.declarations.length - 1];
-    const minAmount = prev ? prev.amount + 1 : 1;
-    const options: { card: Card; amount: number }[] = [];
+    const tier = (c: Card) => (c === 'BJ' ? 2 : c === 'SJ' ? 1 : 0);
+    const options: { card: Card; amount: number; verb: 'Declare' | 'Overturn' | 'Reinforce'; label?: string }[] = [];
 
+    // Rank card declarations
+    const minRankAmount = prev ? prev.amount + 1 : 1;
     for (const suit of BASIC_SUITS) {
       const card = `${myPlayer.rank}${suit}` as Card;
       const owned = counts.get(card) ?? 0;
-      for (let amt = minAmount; amt <= owned; amt++) {
-        options.push({ card, amount: amt });
+      for (let amt = minRankAmount; amt <= owned; amt++) {
+        options.push({ card, amount: amt, verb: prev ? 'Overturn' : 'Declare' });
       }
       // Reinforce option
       if (
         prev &&
         prev.canPrevPlayerReinforce &&
         prev.prevPlayer === state.myIndex &&
+        tier(prev.card) === 0 &&
         owned >= prev.amount
       ) {
         const orig = state.declarations[state.declarations.length - 2];
         if (orig && orig.card === card) {
-          options.push({ card, amount: prev.amount });
+          options.push({ card, amount: prev.amount, verb: 'Reinforce' });
         }
       }
     }
+
+    // Joker declarations / overturns (pair or more -> No Trump)
+    for (const joker of ['SJ', 'BJ'] as Card[]) {
+      const owned = counts.get(joker) ?? 0;
+      const jTier = tier(joker);
+      const minJokerAmount = prev
+        ? Math.max(2, jTier > tier(prev.card) ? prev.amount : prev.amount + 1)
+        : 2;
+      for (let amt = minJokerAmount; amt <= owned; amt++) {
+        options.push({
+          card: joker,
+          amount: amt,
+          verb: prev ? 'Overturn' : 'Declare',
+          label: 'No Trump',
+        });
+      }
+    }
+
     return options;
-  }, [state.phase, state.myHand, state.declarations, state.myIndex, myPlayer]);
+  }, [state.phase, state.myHand, state.declarations, state.myIndex, myPlayer, state.settings.winnersDeclare, state.winners]);
 
   const toggleCardIndex = (idx: number) => {
     setSelectedIndices((prev) =>
@@ -116,8 +168,31 @@ export function GameTable({ state, send }: GameTableProps) {
   }, [state.players]);
 
   const cutoff = state.settings.numDecks * state.settings.cutoffPerDeck;
+  const humanPlayers = useMemo(() => state.players.filter((p) => !p.isBot), [state.players]);
+  const hasVotedReset = Boolean(myPlayer && state.resetVotes.includes(myPlayer.id));
 
-  const displayedTrick = showLastTrick ? state.lastTrick : state.currentTrick;
+  const latestDeclaration =
+    state.declarations.length > 0
+      ? state.declarations[state.declarations.length - 1]
+      : null;
+
+  const showingPreviousTrick =
+    (state.currentTrick.length === 0 || showLastTrick) && state.lastTrick.length > 0;
+  const displayedTrick = showingPreviousTrick ? state.lastTrick : state.currentTrick;
+
+  const winningTrickPlayer = useMemo(() => {
+    if (!state.declared || displayedTrick.length === 0) return null;
+    let winIdx = 0;
+    let winPlays = displayedTrick[0].plays.map((p) => Play.fromJSON(p));
+    for (let i = 1; i < displayedTrick.length; i++) {
+      const challenger = displayedTrick[i].plays.map((p) => Play.fromJSON(p));
+      if (!Play.winsAgainst(winPlays, challenger, state.declared)) {
+        winIdx = i;
+        winPlays = challenger;
+      }
+    }
+    return displayedTrick[winIdx].player;
+  }, [displayedTrick, state.declared]);
 
   return (
     <div className="table-layout">
@@ -125,7 +200,7 @@ export function GameTable({ state, send }: GameTableProps) {
         <div className="hud__group">
           <span className="hud__pill">Phase: {state.phase.toUpperCase()}</span>
           <span className="hud__pill">
-            Trump: <strong>{state.declared ? formatCard(state.declared) : 'Undeclared'}</strong>
+            Trump: <strong>{state.declared ? formatDeclared(state.declared) : 'Undeclared'}</strong>
           </span>
           <span className="hud__pill">
             Defender Pts: <strong>{defenderPoints}</strong> / {cutoff}
@@ -144,13 +219,31 @@ export function GameTable({ state, send }: GameTableProps) {
               ))}
             </span>
           )}
-          {state.lastTrick.length > 0 && (
+          {state.lastTrick.length > 0 &&
+            (state.currentTrick.length > 0 ? (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => setShowLastTrick((v) => !v)}
+              >
+                {showLastTrick ? 'Current Trick' : 'Last Trick'}
+              </button>
+            ) : (
+              <span className="hud__pill">Showing previous trick</span>
+            ))}
+          {myPlayer && !myPlayer.isBot && (
             <button
               type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={() => setShowLastTrick((v) => !v)}
+              className={`btn btn--sm ${
+                state.resetVotes.length > 0 ? 'btn--warn' : 'btn--ghost'
+              }`}
+              onClick={() => send({ type: 'resetGame' })}
             >
-              {showLastTrick ? 'Current Trick' : 'Last Trick'}
+              {humanPlayers.length <= 1
+                ? 'Reset Game'
+                : hasVotedReset
+                  ? `Cancel Reset (${state.resetVotes.length}/${humanPlayers.length})`
+                  : `Vote Reset (${state.resetVotes.length}/${humanPlayers.length})`}
             </button>
           )}
         </div>
@@ -164,20 +257,30 @@ export function GameTable({ state, send }: GameTableProps) {
             (state.phase === 'play' && state.currentTurn === idx) ||
             (state.phase === 'bottom' && state.dealerIndex === idx);
           const trickEntry = displayedTrick.find((t) => t.player === idx);
+          const isBig = winningTrickPlayer === idx;
+          const isCurrentDeclarer = state.phase === 'deal' && latestDeclaration?.player === idx;
           const pts = p.points.reduce((s, c) => s + getPointValue(c), 0);
 
           return (
             <div
               key={p.id}
-              className={`seat ${isTurn ? 'seat--active' : ''} ${idx === state.myIndex ? 'seat--me' : ''}`}
+              className={`seat ${isTurn ? 'seat--active' : ''} ${isBig ? 'seat--big' : ''} ${isCurrentDeclarer ? 'seat--declarer' : ''} ${idx === state.myIndex ? 'seat--me' : ''}`}
             >
               <div className="seat__header">
                 <span className="seat__name">
                   {p.name} {p.isBot ? '🤖' : ''}
                 </span>
                 <div className="seat__badges">
+                  {isBig && <span className="badge badge--big">👑 Big</span>}
+                  {isCurrentDeclarer && (
+                    <span className="badge badge--declared">
+                      Declared {latestDeclaration.amount}×
+                    </span>
+                  )}
                   <span className="rank-pill">R:{p.rank}</span>
-                  {p.isDealer && <span className="badge badge--dealer">Dealer</span>}
+                  {p.isDealer && state.phase !== 'deal' && (
+                    <span className="badge badge--dealer">Dealer</span>
+                  )}
                   {p.isFriend && !p.isDealer && <span className="badge badge--friend">Friend</span>}
                 </div>
               </div>
@@ -185,8 +288,17 @@ export function GameTable({ state, send }: GameTableProps) {
                 <span>Cards: {p.handCount}</span>
                 {!p.isFriend && <span>Pts: {pts}</span>}
               </div>
-              <div className="seat__trick">
-                {trickEntry ? (
+              <div className={`seat__trick ${showingPreviousTrick ? 'seat__trick--prev' : ''}`}>
+                {isCurrentDeclarer && latestDeclaration ? (
+                  Array.from({ length: latestDeclaration.amount }, (_, ci) => (
+                    <CardView
+                      key={ci}
+                      card={latestDeclaration.card}
+                      declared={state.declared}
+                      compact
+                    />
+                  ))
+                ) : trickEntry ? (
                   trickEntry.cards.map((c, ci) => (
                     <CardView key={ci} card={c} declared={state.declared} compact />
                   ))
@@ -203,11 +315,29 @@ export function GameTable({ state, send }: GameTableProps) {
       <section className="action-bar">
         {state.phase === 'deal' && (
           <div className="deal-controls">
-            <span>
-              {state.deckRemaining > state.bottomSize
-                ? `Dealing... (${state.deckRemaining - state.bottomSize} cards left)`
-                : 'Dealing complete — finalize trump!'}
-            </span>
+            <div className="deal-controls__status">
+              <div className="deal-controls__headline">
+                {latestDeclaration ? (
+                  <>
+                    <strong>{state.players[latestDeclaration.player]?.name}</strong> declared{' '}
+                    <strong>
+                      {latestDeclaration.amount}× {formatCard(latestDeclaration.card)}
+                    </strong>{' '}
+                    → Trump: <strong>{formatDeclared(latestDeclaration.declared)}</strong>
+                  </>
+                ) : (
+                  <>
+                    No declaration yet — declare with a single{' '}
+                    <strong>{myPlayer?.rank ?? 'rank card'}</strong> or a pair of jokers
+                  </>
+                )}
+              </div>
+              <span className="deal-controls__sub">
+                {state.deckRemaining > state.bottomSize
+                  ? `Dealing... (${state.deckRemaining - state.bottomSize} cards left)`
+                  : `Dealing complete — starting bottom phase in ${dealSecondsLeft ?? 5}s (overturn now!)`}
+              </span>
+            </div>
             <div className="deal-controls__btns">
               {declarationOptions.map((opt, i) => (
                 <button
@@ -216,18 +346,10 @@ export function GameTable({ state, send }: GameTableProps) {
                   className="btn btn--primary"
                   onClick={() => send({ type: 'declare', card: opt.card, amount: opt.amount })}
                 >
-                  Declare {opt.amount}× {formatCard(opt.card)}
+                  {opt.verb} {opt.amount}× {formatCard(opt.card)}
+                  {opt.label ? ` (${opt.label})` : ''}
                 </button>
               ))}
-              {state.deckRemaining <= state.bottomSize && (
-                <button
-                  type="button"
-                  className="btn btn--secondary"
-                  onClick={() => send({ type: 'endDealPhase' })}
-                >
-                  Start Bottom Phase
-                </button>
-              )}
             </div>
           </div>
         )}
@@ -268,7 +390,7 @@ export function GameTable({ state, send }: GameTableProps) {
                           setFriendCalls(next);
                         }}
                       >
-                        {ALL_CALLABLE_CARDS.map((c) => (
+                        {callableCards.map((c) => (
                           <option key={c} value={c}>
                             {formatCard(c)}
                           </option>
@@ -339,15 +461,16 @@ export function GameTable({ state, send }: GameTableProps) {
             <p>
               Defender Points: <strong>{state.lastRoundResult.points}</strong> (Cutoff: {cutoff})
               {state.lastRoundResult.bottomCapturedByDefenders &&
-                ` — includes +${state.lastRoundResult.bottomPoints} from bottom!`}
+                ` — includes +${state.lastRoundResult.bottomPoints} from bottom (${state.lastRoundResult.bottomMultiplier}×)!`}
             </p>
             <p>
               Winners:{' '}
               <strong>
                 {state.lastRoundResult.winners.map((i) => state.players[i]?.name).join(', ')}
               </strong>{' '}
-              (+{state.lastRoundResult.levelChange} level
-              {state.lastRoundResult.levelChange > 1 ? 's' : ''})
+              {state.lastRoundResult.levelChange > 0
+                ? `(+${state.lastRoundResult.levelChange} level${state.lastRoundResult.levelChange > 1 ? 's' : ''})`
+                : '(+0 levels — defenders win declaration rights)'}
             </p>
             <div className="score-panel__bottom">
               <span>Bottom cards:</span>

@@ -6,6 +6,7 @@ export default defineConfig({
   envDir: '../../',
   server: {
     port: 5173,
+    allowedHosts: ['.trycloudflare.com', '.discordsays.com'],
     proxy: {
       '/api': {
         target: 'http://localhost:3001',
