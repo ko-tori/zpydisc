@@ -1,7 +1,5 @@
-node_modules
-*.pem
+node_modules/
+dist/
+.env
 *.log
 .DS_Store
-build
-dist
-.env

@@ -1,7 +1,0 @@
-.player__avatar {
-  border-radius: 50%;
-  position: absolute;
-  user-select: none;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-}

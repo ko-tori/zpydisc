@@ -1,21 +1,22 @@
 {
-  "name": "activitytest",
-  "version": "0.1.0",
-  "description": "activitytest",
-  "main": "index.js",
+  "name": "zpydisc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Zhaopengyou (Finding Friends) Discord Activity",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/client"
+  ],
   "scripts": {
-    "dev": "pnpm run --filter \"./packages/**\" --parallel dev",
-    "tunnel": "cloudflared tunnel --url http://localhost:3000"
-  },
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "colyseus": "^0.15.17",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "zpy": "github:ko-tori/zpy"
+    "dev": "concurrently -n server,client -c cyan,magenta \"npm run dev -w @zpy/server\" \"npm run dev -w @zpy/client\"",
+    "build": "npm run build -w @zpy/shared && npm run build -w @zpy/server && npm run build -w @zpy/client",
+    "test": "npm run test -w @zpy/shared",
+    "start": "npm run start -w @zpy/server",
+    "tunnel": "cloudflared tunnel --url http://localhost:5173"
   },
   "devDependencies": {
-    "@types/react": "^18.3.11"
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
   }
 }
